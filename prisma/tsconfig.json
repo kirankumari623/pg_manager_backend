@@ -1,0 +1,11 @@
+{
+  // Settings for the files inside the prisma folder (seed.ts). The main tsconfig.json only
+  // covers src/, so the editor did not know about Node's `process` here.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"]
+}

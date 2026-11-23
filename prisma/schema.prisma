@@ -1,0 +1,388 @@
+// Multi-tenant schema: every business table carries organizationId.
+// One Organization = one PG owner / business. All owners share one database,
+// and every query must be filtered by the logged-in user's organizationId.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PLATFORM_ADMIN // you, the product owner
+  OWNER          // PG owner, manages their own organization
+  STAFF          // manager / caretaker with limited access
+  TENANT         // resident, sees only their own data
+}
+
+enum SharingType {
+  SINGLE
+  DOUBLE
+  TRIPLE
+  QUAD
+  DORMITORY
+}
+
+enum BedStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  MAINTENANCE
+}
+
+enum TenantStatus {
+  PENDING       // profile created, not checked in yet
+  ACTIVE
+  NOTICE_PERIOD
+  CHECKED_OUT
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+model Organization {
+  id         String   @id @default(cuid())
+  name       String
+  phone      String?
+  email      String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  users      User[]
+  properties Property[]
+  rooms      Room[]
+  beds       Bed[]
+  tenants    Tenant[]
+  stays      Stay[]
+  bills      Bill[]
+  payments   Payment[]
+  notifications Notification[]
+  expenses   Expense[]
+
+  // Counts receipts issued, so each payment gets the next number (RCP-000001...).
+  receiptCounter Int @default(0)
+
+  // Automation settings. Everything is OFF by default, so nothing happens by itself
+  // until the owner switches it on.
+  autoRentEnabled      Boolean @default(false) // create rent bills on the 1st of every month
+  autoRentDueDay       Int     @default(5)     // day of the month rent is due (1-28)
+  autoSendBills        Boolean @default(true)  // email the new bills straight away
+  autoRemindersEnabled Boolean @default(false) // email reminders for overdue bills
+  reminderEveryDays    Int     @default(3)     // at most one reminder per bill in this many days
+}
+
+model User {
+  id             String   @id @default(cuid())
+  // Null only for PLATFORM_ADMIN users, who sit above all organizations.
+  organizationId String?
+  name           String
+  email          String   @unique
+  phone          String?
+  passwordHash   String
+  role           Role
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenantProfile  Tenant?
+  recordedPayments Payment[]
+  recordedExpenses Expense[]
+
+  @@index([organizationId])
+}
+
+model Property {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  addressLine    String
+  city           String
+  state          String?
+  pincode        String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rooms          Room[]
+  expenses       Expense[]
+
+  @@index([organizationId])
+}
+
+model Room {
+  id             String      @id @default(cuid())
+  organizationId String
+  propertyId     String
+  roomNumber     String
+  floor          Int         @default(0)
+  sharingType    SharingType
+  hasAttachedBath Boolean    @default(false)
+  hasAC          Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property       Property     @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  beds           Bed[]
+
+  @@unique([propertyId, roomNumber])
+  @@index([organizationId])
+}
+
+// PGs rent per bed, so the bed is the unit of occupancy and rent.
+model Bed {
+  id             String    @id @default(cuid())
+  organizationId String
+  roomId         String
+  label          String    // e.g. "A", "B", "Bed 1"
+  monthlyRent    Decimal   @db.Decimal(10, 2)
+  securityDeposit Decimal  @default(0) @db.Decimal(10, 2)
+  status         BedStatus @default(AVAILABLE)
+  // Set when the current tenant has given notice: bed shows "available from".
+  availableFrom  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  room           Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  stays          Stay[]
+
+  @@unique([roomId, label])
+  @@index([organizationId, status])
+}
+
+model Tenant {
+  id               String       @id @default(cuid())
+  organizationId   String
+  // Optional login account, created when the tenant is invited to the app.
+  userId           String?      @unique
+  name             String
+  phone            String
+  email            String?
+  gender           Gender?
+  idProofType      String?      // Aadhaar, PAN, Passport...
+  idProofNumber    String?
+  idProofUrl       String?
+  photoUrl         String?
+  emergencyName    String?
+  emergencyPhone   String?
+  status           TenantStatus @default(PENDING)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user             User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  stays            Stay[]
+  bills            Bill[]
+  payments         Payment[]
+  notifications    Notification[]
+
+  // The same phone number can't be registered twice in one PG business.
+  @@unique([organizationId, phone])
+  @@index([organizationId, status])
+}
+
+// One Stay = one period of a tenant living in one bed.
+// A tenant who leaves and returns later gets a second Stay, so history is kept.
+// A stay with checkOutDate = null is the tenant's current stay.
+model Stay {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  tenantId             String
+  bedId                String
+  checkInDate          DateTime
+  // Set when the tenant gives notice.
+  noticeDate           DateTime?
+  expectedCheckOutDate DateTime?
+  // Set when the tenant actually leaves.
+  checkOutDate         DateTime?
+  // Rent and deposit are copied from the bed at check-in, so later price
+  // changes on the bed don't alter what this tenant agreed to.
+  monthlyRent          Decimal   @db.Decimal(10, 2)
+  securityDeposit      Decimal   @default(0) @db.Decimal(10, 2)
+  // Filled in at check-out.
+  depositRefunded      Decimal?  @db.Decimal(10, 2)
+  depositDeduction     Decimal?  @db.Decimal(10, 2)
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenant               Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bed                  Bed          @relation(fields: [bedId], references: [id], onDelete: Restrict)
+  bills                Bill[]
+
+  @@index([organizationId, checkOutDate])
+  @@index([tenantId])
+  @@index([bedId])
+}
+
+enum BillType {
+  RENT
+  ELECTRICITY
+  LATE_FEE
+  OTHER
+}
+
+enum BillStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CARD
+  CHEQUE
+  OTHER
+}
+
+// A charge against a tenant's stay: monthly rent, electricity, late fee, etc.
+// "Overdue" is not stored; it is worked out from status + dueDate when needed.
+model Bill {
+  id             String     @id @default(cuid())
+  organizationId String
+  stayId         String
+  tenantId       String
+  type           BillType   @default(RENT)
+  // For RENT bills: the first day of the month being billed. Null for one-off charges.
+  periodMonth    DateTime?  @db.Date
+  description    String?
+  amount         Decimal    @db.Decimal(10, 2)
+  paidAmount     Decimal    @default(0) @db.Decimal(10, 2)
+  dueDate        DateTime   @db.Date
+  status         BillStatus @default(UNPAID)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stay           Stay         @relation(fields: [stayId], references: [id], onDelete: Restrict)
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  payments       Payment[]
+  notifications  Notification[]
+
+  // Running "generate rent" twice for the same month can never double-bill a stay.
+  @@unique([stayId, type, periodMonth])
+  @@index([organizationId, status, dueDate])
+  @@index([tenantId])
+}
+
+// Money received against a bill. A bill can have several (partial payments).
+model Payment {
+  id             String        @id @default(cuid())
+  organizationId String
+  billId         String
+  tenantId       String
+  amount         Decimal       @db.Decimal(10, 2)
+  method         PaymentMethod
+  reference      String?       // UPI transaction id, cheque number, etc.
+  paidAt         DateTime      @default(now())
+  receiptNumber  String        // e.g. RCP-000001, unique within the organization
+  notes          String?
+  recordedById   String?
+  createdAt      DateTime      @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bill           Bill         @relation(fields: [billId], references: [id], onDelete: Restrict)
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  recordedBy     User?        @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  notifications  Notification[]
+
+  @@unique([organizationId, receiptNumber])
+  @@index([billId])
+  @@index([tenantId])
+  @@index([organizationId, paidAt])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationType {
+  BILL      // a new rent bill
+  REMINDER  // payment is overdue
+  RECEIPT   // payment received
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+}
+
+// A log of every message the system tries to send, so you can see what went out,
+// to whom, and whether it worked. Also stops the same bill being emailed twice by accident.
+model Notification {
+  id             String              @id @default(cuid())
+  organizationId String
+  tenantId       String?
+  billId         String?
+  paymentId      String?
+  channel        NotificationChannel @default(EMAIL)
+  type           NotificationType
+  toAddress      String              // email address now; phone number for SMS / WhatsApp later
+  subject        String?
+  body           String
+  status         NotificationStatus
+  error          String?
+  createdAt      DateTime            @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenant         Tenant?      @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  bill           Bill?        @relation(fields: [billId], references: [id], onDelete: SetNull)
+  payment        Payment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([billId, type, status])
+  @@index([tenantId])
+}
+
+enum ExpenseCategory {
+  ELECTRICITY
+  WATER
+  FOOD
+  GROCERIES
+  REPAIRS
+  SALARY
+  RENT          // rent the owner pays for the building
+  INTERNET
+  CLEANING
+  TAX
+  OTHER
+}
+
+// Money the owner spends running the PG. Used for the profit report.
+model Expense {
+  id             String          @id @default(cuid())
+  organizationId String
+  // Optional: set it if the cost belongs to one building.
+  propertyId     String?
+  category       ExpenseCategory
+  amount         Decimal         @db.Decimal(10, 2)
+  // The day the money was spent (a plain date, no time).
+  expenseDate    DateTime        @db.Date
+  description    String?
+  paidTo         String?         // shop, vendor or person
+  recordedById   String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property       Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  recordedBy     User?        @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, expenseDate])
+}
