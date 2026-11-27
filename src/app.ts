@@ -21,6 +21,10 @@ import { staffRouter } from "./modules/staff/staff.routes";
 import { automationRouter } from "./modules/automation/automation.routes";
 import { expensesRouter } from "./modules/expenses/expenses.routes";
 import { reportsRouter } from "./modules/reports/reports.routes";
+import { complaintsRouter } from "./modules/complaints/complaints.routes";
+import { announcementsRouter } from "./modules/announcements/announcements.routes";
+import { subscriptionRouter } from "./modules/subscription/subscription.routes";
+import { adminRouter } from "./modules/admin/admin.routes";
 import { internalRouter } from "./modules/internal/internal.routes";
 
 // Slows down password guessing: at most 20 login/signup tries per IP every 15 minutes.
@@ -81,6 +85,10 @@ export function createApp() {
   app.use("/api/automation", automationRouter);
   app.use("/api/expenses", expensesRouter);
   app.use("/api/reports", reportsRouter);
+  app.use("/api/complaints", complaintsRouter);
+  app.use("/api/announcements", announcementsRouter);
+  app.use("/api/subscription", subscriptionRouter);
+  app.use("/api/admin", adminRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

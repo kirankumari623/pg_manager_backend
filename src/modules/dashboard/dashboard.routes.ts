@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { BedStatus, BillStatus, Prisma, Role, TenantStatus } from "@prisma/client";
+import { BedStatus, BillStatus, ComplaintStatus, Prisma, Role, TenantStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { HttpError } from "../../lib/httpError";
 import { asyncHandler } from "../../utils/asyncHandler";
@@ -43,7 +43,7 @@ dashboardRouter.get(
       dueDate: { lt: startOfTodayIST() },
     };
 
-    const [bedGroups, tenantGroups, billsDue, received, overdueTotals, overdueByTenant, upcoming, recent] =
+    const [bedGroups, tenantGroups, billsDue, received, overdueTotals, overdueByTenant, upcoming, recent, complaintGroups] =
       await Promise.all([
         prisma.bed.groupBy({ by: ["status"], where: { organizationId }, _count: { _all: true } }),
         prisma.tenant.groupBy({ by: ["status"], where: { organizationId }, _count: { _all: true } }),
@@ -99,6 +99,12 @@ dashboardRouter.get(
             paidAt: true,
             tenant: { select: { id: true, name: true } },
           },
+        }),
+        // Complaints that still need attention.
+        prisma.complaint.groupBy({
+          by: ["status"],
+          where: { organizationId, status: { in: [ComplaintStatus.OPEN, ComplaintStatus.IN_PROGRESS] } },
+          _count: { _all: true },
         }),
       ]);
 
@@ -170,6 +176,10 @@ dashboardRouter.get(
           billCount: o.billCount,
           oldestDueDate: o.oldestDueDate,
         })),
+      },
+      complaints: {
+        open: complaintGroups.find((g) => g.status === ComplaintStatus.OPEN)?._count._all ?? 0,
+        inProgress: complaintGroups.find((g) => g.status === ComplaintStatus.IN_PROGRESS)?._count._all ?? 0,
       },
       upcomingVacancies: upcoming.map((s) => ({
         stayId: s.id,

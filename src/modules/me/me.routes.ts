@@ -6,6 +6,9 @@ import { HttpError } from "../../lib/httpError";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate, orgIdOf, requireRole } from "../../middleware/auth";
 import { startOfTodayIST } from "../../utils/dates";
+import { ownTenant } from "./ownTenant";
+import { meComplaintsRouter } from "./me.complaints.routes";
+import { meAnnouncementsRouter } from "./me.announcements.routes";
 
 // Everything a TENANT can see. Every query here is filtered by the tenant's own id,
 // so a tenant can never read another tenant's bills or payments, even in the same PG.
@@ -45,18 +48,10 @@ function withDerived<T extends { amount: Prisma.Decimal; paidAmount: Prisma.Deci
   };
 }
 
-// Finds the tenant profile linked to the logged-in account.
-async function ownTenant(userId: string, organizationId: string) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { userId, organizationId },
-    include: { organization: { select: { name: true, phone: true, email: true } } },
-  });
-  if (!tenant) throw HttpError.notFound("No tenant profile is linked to this account");
-  return tenant;
-}
-
 export const meRouter = Router();
 meRouter.use(authenticate, requireRole(Role.TENANT));
+meRouter.use("/complaints", meComplaintsRouter);
+meRouter.use("/announcements", meAnnouncementsRouter);
 
 // GET /api/me/dashboard -> the tenant's home screen in one call
 meRouter.get(

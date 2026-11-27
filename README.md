@@ -159,6 +159,26 @@ curl -X POST http://localhost:4000/api/properties \
 | GET | `/api/reports/monthly` | owner | Income, expenses, profit, unpaid rent, occupancy (`?month=2026-11`) |
 | GET | `/api/reports/trend` | owner | Income / expenses / profit per month for a chart (`?months=6&to=2026-11`) |
 | GET | `/api/reports/export` | owner | CSV download (`?type=payments\|expenses\|bills&month=2026-11`) |
+| POST | `/api/me/complaints` | tenant | Raise a complaint |
+| GET | `/api/me/complaints` | tenant | Own complaints (`?status=`) |
+| GET | `/api/me/complaints/:id` | tenant | One complaint with comments |
+| POST | `/api/me/complaints/:id/comments` | tenant | Add a comment |
+| POST | `/api/me/complaints/:id/reopen` | tenant | Reopen a resolved complaint |
+| GET | `/api/complaints` | owner, staff | List with counts per status (`?status=` `?category=` `?priority=` `?tenantId=` `?propertyId=`) |
+| GET | `/api/complaints/:id` | owner, staff | Complaint with conversation |
+| PATCH | `/api/complaints/:id` | owner, staff | Change status, priority, category, resolution note |
+| POST | `/api/complaints/:id/comments` | owner, staff | Reply to the tenant |
+| POST | `/api/announcements` | owner | Post a notice (`sendEmail: true` also emails it) |
+| GET | `/api/announcements` | owner, staff | List notices (`?active=true`) |
+| PATCH | `/api/announcements/:id` | owner | Edit a notice |
+| DELETE | `/api/announcements/:id` | owner | Delete a notice |
+| POST | `/api/announcements/:id/email` | owner | Email the notice to tenants (`{"resend":true}` to send again) |
+| GET | `/api/me/announcements` | tenant | Notices for the tenant (whole PG + own property) |
+| GET | `/api/subscription` | owner, staff | Plan status: trial / paid / ended, days left, price, how to pay |
+| GET | `/api/admin/organizations` | platform admin | All PG businesses with plan status (`?status=EXPIRED` `?search=`) |
+| GET | `/api/admin/organizations/:id` | platform admin | One business with payment history |
+| POST | `/api/admin/organizations/:id/subscription/payments` | platform admin | Record a payment from an owner and extend their plan |
+| PATCH | `/api/admin/organizations/:id/subscription` | platform admin | Extend the free trial or change the price |
 
 ## Staff
 
@@ -267,6 +287,25 @@ Owners and staff record expenses (`POST /api/expenses`); only the owner can edit
 
 Months and dates use India time. This chunk adds a table: run `npx prisma migrate dev --name add_expenses` after copying the new `schema.prisma`.
 
+## Complaints and announcements
+
+**Complaints:** a tenant raises one (`POST /api/me/complaints`); the building and room are filled in from their stay. Owner and staff move it through `OPEN` -> `IN_PROGRESS` -> `RESOLVED` -> `CLOSED` and chat with the tenant in the comments. A tenant can reopen a `RESOLVED` complaint. The owner dashboard now shows how many complaints are open or in progress.
+
+**Announcements:** the owner posts a notice for all tenants or one property, can pin it and give it a last day (`expiresOn`). Tenants read them at `GET /api/me/announcements`. `sendEmail: true` (or `POST /api/announcements/:id/email`) also emails it to tenants who are staying now. A notice is not emailed twice unless you send `{"resend": true}`.
+
+This chunk adds tables: run `npx prisma migrate dev --name add_complaints_announcements` after copying the new `schema.prisma`.
+
+## Owner subscription (tenants are always free)
+
+- A new owner gets a **free trial** (`TRIAL_DAYS`, default 30) counted from signup, then pays `SUBSCRIPTION_PRICE` (default 300 rupees) per month. Tenants never pay.
+- The plan is worked out from two dates (`trialEndsOn`, `paidUntil`): **TRIALING**, **ACTIVE** (a payment covers today) or **EXPIRED**. Nothing needs to run at midnight.
+- When a plan is **EXPIRED**, owners and staff can still log in and view everything, but every change (POST / PATCH / DELETE) answers **402** "Your free trial has ended...". Tenants are not affected, and the daily automation skips that business until it pays.
+- `GET /api/subscription` and `GET /api/auth/me` (field `subscription`) tell the app what to show, for example "12 days of free trial left".
+- **No payment gateway yet.** Until Razorpay is connected, an owner pays you (UPI, bank...) and you record it with `POST /api/admin/organizations/:id/subscription/payments` using your PLATFORM_ADMIN account. The new period starts the day after what is already covered. One month = 30 days. Put your payment details in `PAYMENT_INSTRUCTIONS` so owners see them.
+- Businesses created before this feature get a fresh free trial the first time they are looked up.
+
+This chunk adds tables: run `npx prisma migrate dev --name add_subscriptions` after copying the new `schema.prisma`.
+
 ## Project structure
 
 ```
@@ -304,4 +343,5 @@ See `src/modules/properties/properties.routes.ts` for the pattern.
 6. ~~Tenant login and tenant dashboard~~ done
 7. ~~Staff accounts~~ and ~~automatic monthly scheduler~~ done
 8. ~~Expenses, monthly report, CSV export~~ done; hosting is prepared (see Deploying)
-9. Complaints, announcements, file uploads (ID proof, photos), SMS / WhatsApp
+9. ~~Complaints and announcements~~ done
+10. File uploads (ID proof, photos), SMS / WhatsApp, React Native app

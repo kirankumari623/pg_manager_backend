@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma";
+import { ensureSubscription, subscriptionState } from "../../lib/subscription";
 import { startOfTodayIST } from "../../utils/dates";
 import { generateRentBills } from "../bills/bills.service";
 import { BulkSummary, sendBulkBillEmails, sendOverdueReminders } from "../notifications/notifications.service";
@@ -45,6 +46,13 @@ export async function runAutomationForOrganization(
     reminders: null,
     notes: [],
   };
+
+  // No bills or emails for an owner whose free trial and payments have run out.
+  const subscription = await ensureSubscription(organizationId);
+  if (!subscriptionState(subscription).canMakeChanges) {
+    summary.notes.push("Skipped: the subscription has ended. Automation resumes once the owner subscribes.");
+    return summary;
+  }
 
   if (org.autoRentEnabled) {
     if (isFirstOfMonth || options.forceGenerate) {

@@ -3,6 +3,8 @@ import { Role, User } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { HttpError } from "../../lib/httpError";
 import { signToken } from "../../lib/jwt";
+import { env } from "../../config/env";
+import { ensureSubscription, newTrialEndDate, subscriptionState } from "../../lib/subscription";
 import { ChangePasswordInput, LoginInput, SignupInput } from "./auth.schema";
 
 // Never send the password hash back to the client.
@@ -25,6 +27,10 @@ export async function signup(input: SignupInput) {
   const user = await prisma.$transaction(async (tx) => {
     const organization = await tx.organization.create({
       data: { name: input.organizationName, email: input.email, phone: input.phone },
+    });
+    // The free trial starts now.
+    await tx.subscription.create({
+      data: { organizationId: organization.id, trialEndsOn: newTrialEndDate(), priceMonthly: env.SUBSCRIPTION_PRICE },
     });
     return tx.user.create({
       data: {
@@ -54,10 +60,32 @@ export async function login(input: LoginInput) {
 export async function getMe(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { organization: true },
+    include: { organization: { include: { subscription: true } } },
   });
   if (!user) throw HttpError.notFound("User not found");
-  return { ...publicUser(user), organization: user.organization };
+
+  let organization = null;
+  let subscription = null;
+  if (user.organization) {
+    const { subscription: sub, ...rest } = user.organization;
+    organization = rest;
+    subscription = sub;
+  }
+  // Accounts from before subscriptions existed get their free trial the first time they are looked up.
+  if (!subscription && user.organizationId && (user.role === Role.OWNER || user.role === Role.STAFF)) {
+    subscription = await ensureSubscription(user.organizationId);
+  }
+
+  // Owners and staff also get their plan, so the app can show "12 days of free trial left".
+  const plan = subscription
+    ? {
+        ...subscriptionState(subscription),
+        priceMonthly: subscription.priceMonthly,
+        trialEndsOn: subscription.trialEndsOn,
+        paidUntil: subscription.paidUntil,
+      }
+    : null;
+  return { ...publicUser(user), organization, subscription: plan };
 }
 
 export async function changePassword(userId: string, input: ChangePasswordInput) {

@@ -28,7 +28,7 @@ export const paymentEmailInclude = {
 export type PaymentForEmail = Prisma.PaymentGetPayload<{ include: typeof paymentEmailInclude }>;
 
 // Sends one email and records what happened in the Notification log, whether it worked or not.
-async function deliverEmail(args: {
+export async function deliverEmail(args: {
   organizationId: string;
   tenantId: string;
   billId?: string;

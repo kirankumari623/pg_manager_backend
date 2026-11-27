@@ -7,13 +7,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { validateBody } from "../../middleware/validate";
 import { authenticate, orgIdOf, requireRole } from "../../middleware/auth";
 import { monthRange } from "../../utils/dates";
-
-// A real calendar date written as 2026-11-13. Stored as a plain date (midnight UTC).
-const dateOnly = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "date must look like 2026-11-13")
-  .refine((v) => !isNaN(new Date(`${v}T00:00:00.000Z`).getTime()) && new Date(`${v}T00:00:00.000Z`).toISOString().startsWith(v), "not a real date")
-  .transform((v) => new Date(`${v}T00:00:00.000Z`));
+import { dateOnly } from "../../utils/dateInput";
 
 const createSchema = z.object({
   category: z.nativeEnum(ExpenseCategory),

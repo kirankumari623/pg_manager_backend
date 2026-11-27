@@ -65,6 +65,10 @@ model Organization {
   payments   Payment[]
   notifications Notification[]
   expenses   Expense[]
+  complaints Complaint[]
+  announcements Announcement[]
+  subscription Subscription?
+  subscriptionPayments SubscriptionPayment[]
 
   // Counts receipts issued, so each payment gets the next number (RCP-000001...).
   receiptCounter Int @default(0)
@@ -95,6 +99,9 @@ model User {
   tenantProfile  Tenant?
   recordedPayments Payment[]
   recordedExpenses Expense[]
+  recordedSubscriptionPayments SubscriptionPayment[]
+  complaintComments ComplaintComment[]
+  createdAnnouncements Announcement[]
 
   @@index([organizationId])
 }
@@ -114,6 +121,8 @@ model Property {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   rooms          Room[]
   expenses       Expense[]
+  complaints     Complaint[]
+  announcements  Announcement[]
 
   @@index([organizationId])
 }
@@ -185,6 +194,7 @@ model Tenant {
   bills            Bill[]
   payments         Payment[]
   notifications    Notification[]
+  complaints       Complaint[]
 
   // The same phone number can't be registered twice in one PG business.
   @@unique([organizationId, phone])
@@ -316,6 +326,7 @@ enum NotificationType {
   BILL      // a new rent bill
   REMINDER  // payment is overdue
   RECEIPT   // payment received
+  ANNOUNCEMENT // a notice from the owner
 }
 
 enum NotificationStatus {
@@ -385,4 +396,135 @@ model Expense {
   recordedBy     User?        @relation(fields: [recordedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId, expenseDate])
+}
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum ComplaintCategory {
+  WATER
+  ELECTRICITY
+  CLEANING
+  FOOD
+  WIFI
+  FURNITURE
+  NOISE
+  SECURITY
+  OTHER
+}
+
+enum ComplaintPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// A problem a tenant reports (broken tap, no wifi...). Owner and staff work it through the statuses.
+model Complaint {
+  id             String            @id @default(cuid())
+  organizationId String
+  tenantId       String
+  // Copied from the tenant's stay when the complaint is raised, so the owner knows where it is.
+  propertyId     String?
+  roomNumber     String?
+  category       ComplaintCategory
+  priority       ComplaintPriority @default(MEDIUM)
+  title          String
+  description    String
+  status         ComplaintStatus   @default(OPEN)
+  resolutionNote String?
+  resolvedAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property       Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  comments       ComplaintComment[]
+
+  @@index([organizationId, status, createdAt])
+  @@index([tenantId])
+}
+
+// The conversation on a complaint, between the tenant and the owner or staff.
+model ComplaintComment {
+  id          String   @id @default(cuid())
+  complaintId String
+  authorId    String?
+  authorRole  Role
+  body        String
+  createdAt   DateTime @default(now())
+
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  author      User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([complaintId, createdAt])
+}
+
+// A notice from the owner. Shown to every tenant, or only to tenants staying in one property.
+model Announcement {
+  id             String    @id @default(cuid())
+  organizationId String
+  // Null means "all tenants of this PG business".
+  propertyId     String?
+  title          String
+  body           String
+  isPinned       Boolean   @default(false)
+  // Last day the notice is shown (a plain date). Null means it never expires.
+  expiresOn      DateTime? @db.Date
+  // Set when the notice has been emailed to tenants, so it is not emailed twice by accident.
+  emailedAt      DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property       Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  createdBy      User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+}
+
+// What an owner (PG business) pays to use the app: a free trial, then a monthly fee.
+// Tenants never pay. There is no stored "status": it is worked out from the two dates below
+// (see src/lib/subscription.ts), so nothing has to run at midnight to expire anyone.
+model Subscription {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  // Last day the app is free (a plain date).
+  trialEndsOn    DateTime @db.Date
+  // Last day covered by money received. Null until the first payment.
+  paidUntil      DateTime? @db.Date
+  // Price per month, in rupees. Copied from the setting when the account is created.
+  priceMonthly   Decimal  @default(300) @db.Decimal(10, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// One row per payment received from an owner. For now these are entered by hand by the
+// platform admin; later a payment gateway (Razorpay) can create them automatically.
+model SubscriptionPayment {
+  id             String   @id @default(cuid())
+  organizationId String
+  amount         Decimal  @db.Decimal(10, 2)
+  months         Int      @default(1)
+  method         PaymentMethod
+  reference      String?  // UPI transaction id, bank reference...
+  note           String?
+  // The period this payment bought.
+  coversFrom     DateTime @db.Date
+  coversUntil    DateTime @db.Date
+  recordedById   String?
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recordedBy     User?        @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
 }

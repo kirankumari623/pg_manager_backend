@@ -26,6 +26,12 @@ const envSchema = z.object({
 
   // Optional. When set, POST /api/internal/run-daily (header x-cron-secret) triggers the daily job.
   CRON_SECRET: z.string().min(16, "CRON_SECRET must be at least 16 characters").optional(),
+
+  // Owner subscription. Tenants are always free.
+  TRIAL_DAYS: z.coerce.number().int().min(0).max(365).default(30), // free days after an owner signs up
+  SUBSCRIPTION_PRICE: z.coerce.number().positive().default(300), // rupees per month
+  // Shown to owners until a payment gateway is connected, e.g. "Pay by UPI to xyz@bank, then send the reference to support@..."
+  PAYMENT_INSTRUCTIONS: z.string().optional(),
 }).superRefine((value, ctx) => {
   if (value.NODE_ENV === "production") {
     if (value.JWT_SECRET.length < 32) {

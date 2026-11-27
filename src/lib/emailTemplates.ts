@@ -188,3 +188,19 @@ export function receiptEmail(args: {
     html: layout(pg, "Payment receipt", intro, rows, outro),
   };
 }
+
+// A notice from the owner to tenants.
+export function announcementEmail(args: { tenantName: string; pg: PgInfo; title: string; body: string }) {
+  const { tenantName, pg, title, body } = args;
+  const intro = `Hi ${tenantName}, here is a notice from ${pg.name}.`;
+  const outro = contactLine(pg);
+  const extraHtml =
+    `<h4 style="margin:16px 0 6px">${escapeHtml(title)}</h4>` +
+    `<p style="margin:0 0 12px;white-space:pre-wrap">${escapeHtml(body)}</p>`;
+
+  return {
+    subject: `${title} - ${pg.name}`,
+    text: plainText(pg, intro, [], outro, ["", title, "", body]),
+    html: layout(pg, "Notice", intro, [], outro, extraHtml),
+  };
+}
